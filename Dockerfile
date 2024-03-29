@@ -1,11 +1,11 @@
-FROM golang:1.14 AS build
-WORKDIR /build
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go install ./...
+FROM debian:bookworm
+ARG TARGETARCH
 
-FROM scratch
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=build /go/bin/sa2oidc /usr/bin/sa2oidc
-ENTRYPOINT ["/usr/bin/sa2oidc"]
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y ca-certificates
+
+COPY sa2oidc-$TARGETARCH /usr/bin/tsproxy
+
+CMD ["/usr/bin/sa2oidc"]

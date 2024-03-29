@@ -9,7 +9,6 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -107,7 +106,7 @@ func (s *staticKeysource) PublicKeys(ctx context.Context) (*jose.JSONWebKeySet, 
 func loadKeysFromFile(path string) (jose.JSONWebKeySet, error) {
 	jwks := jose.JSONWebKeySet{}
 
-	raw, err := ioutil.ReadFile(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return jose.JSONWebKeySet{}, fmt.Errorf("reading %s: %v", path, err)
 	}

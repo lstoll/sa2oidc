@@ -5,17 +5,17 @@ import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
-	"encoding/pem"
 	"flag"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/pardot/oidc/discovery"
 	"gopkg.in/square/go-jose.v2"
+	"k8s.io/client-go/util/keyutil"
 )
 
 type config struct {
@@ -104,44 +104,45 @@ func (s *staticKeysource) PublicKeys(ctx context.Context) (*jose.JSONWebKeySet, 
 }
 
 func loadKeysFromFile(path string) (jose.JSONWebKeySet, error) {
-	jwks := jose.JSONWebKeySet{}
 
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return jose.JSONWebKeySet{}, fmt.Errorf("reading %s: %v", path, err)
 	}
 
-	for {
-		block, rest := pem.Decode(raw)
-		if block == nil {
-			break
-		}
-		if block.Type != "PUBLIC KEY" && block.Type != "RSA PUBLIC KEY" && block.Type != "EC PRIVATE KEY" {
-			return jose.JSONWebKeySet{}, fmt.Errorf("non public key block type %s found in %s", block.Type, path)
-		}
+	keys, err := keyutil.ParsePublicKeysPEM(raw)
+	if err != nil {
+		return jose.JSONWebKeySet{}, fmt.Errorf("parsing keys file %s: %w", path, err)
+	}
 
-		parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
-		if err != nil {
-			return jose.JSONWebKeySet{}, fmt.Errorf("parsing public key: %v", err)
-		}
-
-		var alg jose.SignatureAlgorithm
-		switch parsed.(type) {
+	jwks := jose.JSONWebKeySet{}
+	for _, k := range keys {
+		var (
+			alg      jose.SignatureAlgorithm
+			keyBytes []byte // internal format, to generate a stable ID
+		)
+		switch k := k.(type) {
 		case *rsa.PublicKey:
 			alg = jose.RS256
+			keyBytes = append(k.N.Bytes(), big.NewInt(int64(k.E)).Bytes()...)
 		case *ecdsa.PublicKey:
 			alg = jose.ES256
+			ecdhk, err := k.ECDH()
+			if err != nil {
+				return jose.JSONWebKeySet{}, fmt.Errorf("ec key to ecdh: %w", err)
+			}
+			keyBytes = ecdhk.Bytes()
 		default:
-			return jose.JSONWebKeySet{}, fmt.Errorf("invalid public key type: %T", parsed)
+			return jose.JSONWebKeySet{}, fmt.Errorf("invalid public key type: %T", k)
 		}
 
 		// generate a stable identifier we can refer to this key across runs with
 		h := sha256.New()
-		h.Write(block.Bytes)
-		fp := fmt.Sprintf("%x", h.Sum(nil))
+		h.Write(keyBytes)
+		fp := fmt.Sprintf("%x", h.Sum(nil))[0:12]
 
 		jk := jose.JSONWebKey{
-			Key:       parsed,
+			Key:       k,
 			KeyID:     fp,
 			Use:       "sig",
 			Algorithm: string(alg),
@@ -151,8 +152,6 @@ func loadKeysFromFile(path string) (jose.JSONWebKeySet, error) {
 		}
 
 		jwks.Keys = append(jwks.Keys, jk)
-
-		raw = rest
 	}
 
 	return jwks, nil
